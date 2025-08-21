@@ -1735,6 +1735,7 @@ class TestPaymentRequest(FrappeTestCase):
 			pg_name="Mpesa-" + rz.payment_gateway_name,
 			payment_channel="Phone",
 			is_default=True,
+			currency="USD"
 		)
 		payment_account = frappe.get_value(
 			"Payment Gateway Account",
