@@ -100,6 +100,120 @@ class TestPaymentOrder(FrappeTestCase):
 			]
 		check_gl_entries(self,jv_doc.name,expected_accounts,jv_doc.posting_date,"Journal Entry")
 
+	def test_make_payment_records(self):
+		from erpnext.stock.doctype.warehouse.test_warehouse import create_warehouse
+		from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
+		from erpnext.accounts.doctype.payment_entry.test_payment_entry import create_company
+		from erpnext.buying.doctype.supplier.test_supplier import create_supplier
+		from .payment_order import make_payment_records
+		from frappe.core.doctype.session_default_settings.session_default_settings import set_session_default_values
+		create_company("_Test Company")
+		if frappe.db.get_value("Company", "_Test Company", "default_currency") != "INR":
+			frappe.db.set_value("Company", "_Test Company", "default_currency", "INR")
+		set_session_default_values({"Company": "_Test Company"})
+		supplier = create_supplier(supplier_name="_Test Supplier 1")
+		supplier.default_currency = "INR"
+		supplier.save(ignore_permissions=True)
+		create_warehouse(warehouse_name="_Test Warehouse 1")
+		if not frappe.db.exists("UOM","_Test UOM"): 
+			frappe.get_doc({
+				"doctype": "UOM",
+				"uom_name": "_Test UOM",
+			}).insert()
+		purchase_invoice = make_purchase_invoice(supplier="_Test Supplier 1")
+		payment_request=make_payment_request( 
+			dn=purchase_invoice.name,
+			dt="Purchase Invoice",
+			return_doc=1,
+		)
+		payment_request.is_payment_order_required=1
+		payment_request.save()
+		payment_request.submit()
+		
+		payment_order = frappe.get_doc({
+			"doctype": "Payment Order",
+			"company": "_Test Company",
+			"payment_order_type": "Payment Entry",
+			"company_bank_account": self.bank_account,
+			"references": [
+				{
+					"reference_doctype": "Purchase Invoice",
+					"reference_name": purchase_invoice.name,
+					"supplier": "_Test Supplier 1",
+					"amount": payment_request.grand_total,
+					"payment_request": payment_request.name,
+					"bank_account": self.bank_account,
+					"mode_of_payment": "Cash"
+				}
+			]
+		}).insert().save().submit()
+		make_payment_records(payment_order, "_Test Supplier 1")
+		je_doc = frappe.get_all(
+			"Journal Entry",
+			filters={"payment_order": payment_order.name},
+			order_by="creation desc",
+			limit=1,
+			fields=["name"]
+		)
+		self.assertEqual(len(je_doc), 1)
+		self.assertTrue(je_doc[0].name)
+	
+	def test_get_supplier_query(self):
+		from erpnext.stock.doctype.warehouse.test_warehouse import create_warehouse
+		from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
+		from erpnext.accounts.doctype.payment_entry.test_payment_entry import create_company
+		from erpnext.buying.doctype.supplier.test_supplier import create_supplier
+		from .payment_order import get_supplier_query
+		from frappe.core.doctype.session_default_settings.session_default_settings import set_session_default_values
+		create_company("_Test Company")
+		if frappe.db.get_value("Company", "_Test Company", "default_currency") != "INR":
+			frappe.db.set_value("Company", "_Test Company", "default_currency", "INR")
+		set_session_default_values({"Company": "_Test Company"})
+		supplier = create_supplier(supplier_name="_Test Supplier 1")
+		supplier.default_currency = "INR"
+		supplier.save(ignore_permissions=True)
+		create_warehouse(warehouse_name="_Test Warehouse 1")
+		if not frappe.db.exists("UOM","_Test UOM"): 
+			frappe.get_doc({
+				"doctype": "UOM",
+				"uom_name": "_Test UOM",
+			}).insert()
+		purchase_invoice = make_purchase_invoice(supplier="_Test Supplier 1")
+		payment_request=make_payment_request( 
+			dn=purchase_invoice.name,
+			dt="Purchase Invoice",
+			return_doc=1,
+		)
+		payment_request.is_payment_order_required=1
+		payment_request.save()
+		payment_request.submit()
+		
+		payment_order = frappe.get_doc({
+			"doctype": "Payment Order",
+			"company": "_Test Company",
+			"payment_order_type": "Payment Entry",
+			"company_bank_account": self.bank_account,
+			"references": [
+				{
+					"reference_doctype": "Purchase Invoice",
+					"reference_name": purchase_invoice.name,
+					"supplier": "_Test Supplier 1",
+					"amount": payment_request.grand_total,
+					"payment_request": payment_request.name,
+					"bank_account": self.bank_account,
+					"mode_of_payment": "Cash"
+				}
+			]
+		}).insert().save().submit()
+		results = get_supplier_query(
+				doctype="Payment Order Reference",
+				txt="_Test Supplier",
+				searchfield="supplier",
+				start=0,
+				page_len=10,
+				filters={"parent": payment_order.name}
+		)
+		self.assertEqual(results, [("_Test Supplier 1",)], f"Unexpected result: {results}")
 	
 def create_payment_order_against_payment_entry(ref_doc, order_type, bank_account):
 	payment_order = frappe.get_doc(
