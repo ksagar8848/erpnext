@@ -214,6 +214,72 @@ class TestPaymentOrder(FrappeTestCase):
 				filters={"parent": payment_order.name}
 		)
 		self.assertEqual(results, [("_Test Supplier 1",)], f"Unexpected result: {results}")
+  
+	def test_get_mop_query(self):
+		from erpnext.stock.doctype.warehouse.test_warehouse import create_warehouse
+		from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
+		from erpnext.accounts.doctype.payment_entry.test_payment_entry import create_company
+		from erpnext.buying.doctype.supplier.test_supplier import create_supplier
+		from .payment_order import get_mop_query
+		from frappe.core.doctype.session_default_settings.session_default_settings import set_session_default_values
+
+		create_company("_Test Company")
+		if frappe.db.get_value("Company", "_Test Company", "default_currency") != "INR":
+			frappe.db.set_value("Company", "_Test Company", "default_currency", "INR")
+		set_session_default_values({"Company": "_Test Company"})
+		create_warehouse(warehouse_name="_Test Warehouse 1")
+  
+		supplier = create_supplier(supplier_name="_Test Supplier MOP")
+		supplier.default_currency = "INR"
+		supplier.save(ignore_permissions=True)
+
+		create_warehouse(warehouse_name="_Test Warehouse MOP")
+		if not frappe.db.exists("UOM","_Test UOM"): 
+			frappe.get_doc({
+				"doctype": "UOM",
+				"uom_name": "_Test UOM",
+			}).insert()
+
+		from erpnext.accounts.doctype.purchase_invoice.test_purchase_invoice import make_purchase_invoice
+		purchase_invoice = make_purchase_invoice(supplier="_Test Supplier MOP")
+		payment_request = make_payment_request( 
+			dn=purchase_invoice.name,
+			dt="Purchase Invoice",
+			return_doc=1,
+		)
+		payment_request.is_payment_order_required = 1
+		payment_request.save()
+		payment_request.submit()
+
+		payment_order = frappe.get_doc({
+			"doctype": "Payment Order",
+			"company": "_Test Company",
+			"payment_order_type": "Payment Entry",
+			"company_bank_account": self.bank_account,
+		})
+		payment_order.append("references",{
+				"reference_doctype": "Purchase Invoice",
+				"reference_name": purchase_invoice.name,
+				"supplier": "_Test Supplier MOP",
+				"amount": payment_request.grand_total,
+				"payment_request": payment_request.name,
+				"bank_account": self.bank_account,
+				"mode_of_payment": "Cash"
+		})
+		payment_order.save(ignore_permissions=True)
+		if payment_order.references and not payment_order.references[0].mode_of_payment:
+			frappe.db.set_value("Payment Order Reference", payment_order.references[0].name, "mode_of_payment", "Cash")
+		
+		results = get_mop_query(
+			doctype="Payment Order Reference",
+			txt="Cash",
+			searchfield="mode_of_payment",
+			start=0,
+			page_len=10,
+			filters={"parent": payment_order.name}
+		)
+		self.assertEqual(results, [("Cash",)], f"Unexpected result: {results}")
+
 	
 def create_payment_order_against_payment_entry(ref_doc, order_type, bank_account):
 	payment_order = frappe.get_doc(
