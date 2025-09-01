@@ -383,6 +383,118 @@ class TestPeriodClosingVoucher(unittest.TestCase):
 			self.assertEqual(gle[i]["debit"], entry["debit"])
 			self.assertEqual(gle[i]["credit"], entry["credit"])
 
+	def test_get_period_start_end_date_TC_ACC_361(self):
+		from erpnext.accounts.doctype.period_closing_voucher.period_closing_voucher import (
+			get_period_start_end_date,
+		)
+		from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_company
+		from erpnext.accounts.utils import get_fiscal_year
+		from erpnext.buying.doctype.purchase_order.test_purchase_order import get_or_create_fiscal_year
+
+		company = create_company(
+			company_name="_Test Period Closing Company", 
+			abbr="_TPC",
+			currency="INR",
+			country="India"
+		)
+		get_or_create_fiscal_year("_Test Period Closing Company")
+
+		fy = get_fiscal_year(company="_Test Period Closing Company")
+		
+		self.assertTrue(fy)
+  
+		start_date, end_date = get_period_start_end_date(fy.get("name"), company)
+		self.assertEqual(start_date, frappe.db.get_value("Fiscal Year", fy, "year_start_date"))
+		self.assertEqual(end_date, frappe.db.get_value("Fiscal Year", fy, "year_end_date"))
+
+	def test_cancel_gl_entries_when_gle_count_above_limit_TC_ACC_362(self):
+	
+		pcv = frappe.get_doc(
+			{
+				"doctype": "Period Closing Voucher",
+				"company": "_Test Company",
+				"closing_account_head": "_Test Account",
+				"posting_date": frappe.utils.nowdate(),
+			}
+		)
+		pcv.name = "_Test PCV"
+		pcv.get_gle_count_against_current_pcv = lambda: 5005
+
+		# Patch frappe.enqueue and frappe.msgprint
+		enqueue_calls, msgprint_calls = {}, {}
+		def mock_enqueue(fn, **kwargs):
+			enqueue_calls.update(kwargs)
+		def mock_msgprint(msg, **kwargs):
+			msgprint_calls.update({"msg": msg, **kwargs})
+
+		orig_enqueue, orig_msgprint = frappe.enqueue, frappe.msgprint
+		frappe.enqueue, frappe.msgprint = mock_enqueue, mock_msgprint
+
+		try:
+			pcv.cancel_gl_entries()
+		finally:
+			frappe.enqueue, frappe.msgprint = orig_enqueue, orig_msgprint
+
+		self.assertEqual(enqueue_calls.get("voucher_type"), "Period Closing Voucher")
+		self.assertEqual(enqueue_calls.get("voucher_no"), pcv.name)
+		self.assertEqual(enqueue_calls.get("queue"), "long")
+		self.assertTrue(enqueue_calls.get("enqueue_after_commit"))
+
+		
+		self.assertIn("cancelled in the background", msgprint_calls.get("msg"))
+		self.assertTrue(msgprint_calls.get("alert"))
+  
+	def test_validate_start_and_end_date_invalid_cases_with_messages_TC_ACC_363(self):
+		from frappe.utils import add_days, formatdate
+		from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_company
+		from erpnext.accounts.utils import get_fiscal_year
+		from erpnext.buying.doctype.purchase_order.test_purchase_order import get_or_create_fiscal_year
+
+		create_company(
+			company_name="_Test Company", 
+			abbr="_TC",
+			currency="INR",
+			country="India"
+		)
+		get_or_create_fiscal_year("_Test Company")
+		fy = get_fiscal_year(company="_Test Company")
+
+		pcv1 = frappe.new_doc("Period Closing Voucher")
+		pcv1.fiscal_year = fy.name
+		pcv1.company = "_Test Company"
+		pcv1.period_start_date = add_days(fy.year_start_date, 5)  
+		pcv1.period_end_date = fy.year_end_date
+		with self.assertRaises(frappe.ValidationError) as cm1:
+			pcv1.validate_start_and_end_date()
+		self.assertIn(
+			f"Period Start Date must be {formatdate(fy.year_start_date)}",
+			str(cm1.exception)
+		)
+  
+		pcv2 = frappe.new_doc("Period Closing Voucher")
+		pcv2.fiscal_year = fy.name
+		pcv2.company = "_Test Company"
+		pcv2.period_start_date = fy.year_start_date   
+		pcv2.period_end_date = add_days(fy.year_start_date, -1) 
+		with self.assertRaises(frappe.ValidationError) as cm2:
+			pcv2.validate_start_and_end_date()
+		self.assertIn(
+			"Period Start Date cannot be greater than Period End Date",
+			str(cm2.exception)
+		)
+		
+		pcv3 = frappe.new_doc("Period Closing Voucher")
+		pcv3.fiscal_year = fy.name
+		pcv3.company = "_Test Company"
+		pcv3.period_start_date = fy.year_start_date
+		pcv3.period_end_date = add_days(fy.year_end_date, 1)  # Beyond FY end
+		with self.assertRaises(frappe.ValidationError) as cm3:
+			pcv3.validate_start_and_end_date()
+		self.assertIn(
+			"Period End Date cannot be greater than Fiscal Year End Date",
+			str(cm3.exception)
+		)
+
 
 	def make_period_closing_voucher(self, posting_date, submit=True):
 		surplus_account = create_account()

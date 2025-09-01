@@ -100,7 +100,7 @@ class TestPaymentOrder(FrappeTestCase):
 			]
 		check_gl_entries(self,jv_doc.name,expected_accounts,jv_doc.posting_date,"Journal Entry")
 
-	def test_make_payment_records(self):
+	def test_make_payment_records_TC_ACC_361(self):
 		from erpnext.stock.doctype.warehouse.test_warehouse import create_warehouse
 		from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
 		from erpnext.accounts.doctype.payment_entry.test_payment_entry import create_company
@@ -158,7 +158,7 @@ class TestPaymentOrder(FrappeTestCase):
 		self.assertEqual(len(je_doc), 1)
 		self.assertTrue(je_doc[0].name)
 	
-	def test_get_supplier_query(self):
+	def test_get_supplier_query_TC_ACC_362(self):
 		from erpnext.stock.doctype.warehouse.test_warehouse import create_warehouse
 		from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
 		from erpnext.accounts.doctype.payment_entry.test_payment_entry import create_company
@@ -215,7 +215,7 @@ class TestPaymentOrder(FrappeTestCase):
 		)
 		self.assertEqual(results, [("_Test Supplier 1",)], f"Unexpected result: {results}")
   
-	def test_get_mop_query(self):
+	def test_get_mop_query_TC_ACC_363(self):
 		from erpnext.stock.doctype.warehouse.test_warehouse import create_warehouse
 		from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
 		from erpnext.accounts.doctype.payment_entry.test_payment_entry import create_company
