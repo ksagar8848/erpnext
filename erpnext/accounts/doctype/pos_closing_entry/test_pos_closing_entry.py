@@ -26,8 +26,9 @@ from erpnext.stock.doctype.stock_entry.test_stock_entry import make_stock_entry
 
 class TestPOSClosingEntry(unittest.TestCase):
 	def setUp(self):
+		create_records()
 		# Make stock available for POS Sales
-		make_stock_entry(target="_Test Warehouse - _TC", qty=2, basic_rate=100)
+		make_stock_entry(target="_Test Warehouse - _TC", qty=2, basic_rate=100, item_code="_Test Item",item = "_Test Item")
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
@@ -424,3 +425,15 @@ def get_test_item_qty(pos_profile):
 	)
 	return test_item_qty
 
+def create_records():
+	from erpnext.accounts.doctype.payment_entry.test_payment_entry import (
+		create_company,
+		make_test_item,
+	)
+	from erpnext.stock.doctype.warehouse.test_warehouse import create_warehouse
+	create_company("_Test Company")
+	make_test_item("_Test Item")
+	create_warehouse(
+		warehouse_name="_Test Warehouse - _TC",
+		company="_Test Company",
+	)
