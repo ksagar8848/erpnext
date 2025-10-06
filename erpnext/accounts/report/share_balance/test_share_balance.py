@@ -69,3 +69,41 @@ class TestShareBalance(FrappeTestCase):
         filters = {"shareholder": "_Test Shareholder"}
         with self.assertRaises(frappe.exceptions.ValidationError):
             execute(filters)
+
+    def test_execute_merges_share_type_updates_rate(self):
+        """Ensure multiple entries with same share_type merge and update rate"""
+        shareholder = frappe.get_doc({
+            "doctype": "Shareholder",
+            "title": "_Test Merge Once Shareholder",
+            "shareholder_name": "_Test Merge Once Shareholder",
+            "share_balance": [
+                {
+                    "title": "Equity-1",
+                    "share_type": "Equity",
+                    "no_of_shares": 10,
+                    "rate": 100,
+                    "amount": 1000,
+                    "from_no": 1,
+                    "to_no": 10
+                },
+                {
+                    "title": "Equity-2",
+                    "share_type": "Equity",  # same type -> triggers merge block
+                    "no_of_shares": 20,
+                    "rate": 200,
+                    "amount": 4000,
+                    "from_no": 11,
+                    "to_no": 30
+                }
+            ]
+        }).insert(ignore_permissions=True)
+
+        filters = {"date": frappe.utils.now(), "shareholder": shareholder.name}
+        columns, data = execute(filters)
+
+        # merged into one row
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0][1], "Equity")
+        self.assertEqual(data[0][2], 30)    # shares merged: 10 + 20
+        self.assertEqual(data[0][4], 5000)  # amount merged: 1000 + 4000
+        self.assertAlmostEqual(data[0][3], 5000 / 30)  # rate updated correctly
