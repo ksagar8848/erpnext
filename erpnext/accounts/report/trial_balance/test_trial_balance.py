@@ -3,7 +3,7 @@
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
-from frappe.utils import today
+from frappe.utils import today, add_days
 
 from erpnext.accounts.report.trial_balance.trial_balance import execute
 
@@ -74,12 +74,82 @@ class TestTrialBalance(FrappeTestCase):
 			}
 		)
 		total_row = execute(filters)[1][-1]
+  
 		self.assertEqual(total_row["debit"], total_row["credit"])
 
 	def tearDown(self):
 		clear_dimension_defaults("Branch")
 		disable_dimension()
+	def test_offsetting_entries_for_accounting_dimensions_ignore_acb(self):
+		"""
+		Checks if Trial Balance Report is balanced when filtered using a particular Accounting Dimension
+		"""
+		from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import (
+			create_sales_invoice,
+		)
+		from erpnext.accounts.utils import get_fiscal_year
+		frappe.db.sql(
+			"delete from `tabSales Invoice` where company='Trial Balance Company'"
+		)
+		frappe.db.sql("delete from `tabGL Entry` where company='Trial Balance Company'")
 
+		branch1 = frappe.new_doc("Branch")
+		branch1.branch = "Location 1"
+		branch1.insert(ignore_if_duplicate=True)
+		branch2 = frappe.new_doc("Branch")
+		branch2.branch = "Location 2"
+		branch2.insert(ignore_if_duplicate=True)
+
+		si = create_sales_invoice(
+			company=self.company,
+			debit_to="Debtors - TBC",
+			cost_center="Test Cost Center - TBC",
+			income_account="Sales - TBC",
+			posting_date=add_days(today(), -7),
+			do_not_submit=1,
+		)
+		si.branch = "Location 1"
+		si.items[0].branch = "Location 2"
+		si.save()
+		si.submit()
+
+		filters = frappe._dict(
+			{
+				"company": self.company,
+				"fiscal_year": self.fiscal_year,
+				"branch": ["Location 1"],
+				"from_date": today(),
+			}
+		)
+		frappe.db.set_value(
+			"Accounts Settings",
+			None,
+			"ignore_account_closing_balance",
+			0
+		)
+		year = get_fiscal_year(today(), company=self.company)
+
+		# Create the Period Closing Voucher
+		pcv = frappe.get_doc({
+			"doctype": "Period Closing Voucher",
+			"company": self.company,
+			"fiscal_year": year[0],  
+			"voucher_date": today(),
+			"period_start_date": year[1],  
+			"period_end_date": add_days(today(), -2),
+   			"closing_account_head": "Retained Earnings - TBC",
+			"remarks": "Period Closing Voucher",
+			"accounts": [
+				{
+					"account": "Cash - TBC", 
+					"balance": 0
+				}
+			]
+		}).insert(ignore_permissions=True)
+		pcv.submit()
+		total_row = execute(filters)[1][-1]
+  
+		self.assertEqual(total_row["debit"], total_row["credit"])
 	def test_validate_filters_with_invalid_dates(self):
 		filters = frappe._dict(
 			{
@@ -219,13 +289,9 @@ class TestTrialBalance(FrappeTestCase):
 		self.assertTrue(any(c["fieldname"] == "account" for c in cols))
 
 	def test_get_opening_balance_with_all_filters(self):
-		from erpnext.accounts.report.trial_balance.trial_balance import (
-			get_opening_balance,
-		)
-		from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import (
-			create_sales_invoice,
-		)
-		from frappe.utils import today
+		from erpnext.accounts.report.trial_balance.trial_balance import get_opening_balance
+		from erpnext.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
+		from frappe.utils import today, add_days, getdate
 
 		# Create a test customer
 		if not frappe.db.exists("Customer", "Test Customer"):
@@ -267,17 +333,49 @@ class TestTrialBalance(FrappeTestCase):
 				"to_fiscal_year": year,
 			}
 		)
-	
-		# Get opening balances
-		result = get_opening_balance(
-			doctype="GL Entry", report_type="Profit and Loss", filters=filters, accounting_dimensions=[], ignore_is_opening=1
+
+		# Mock last_period_closing_voucher to cover the skipped branch
+		last_period_closing_voucher = [frappe._dict({
+			"name": "TEST-PCV-001",
+			"period_end_date": add_days(filters.from_date, -2)  # ensure it's before filters.from_date - 1
+		})]
+
+		# Execute the branch for Account Closing Balance
+		gle = get_opening_balance(
+			"Account Closing Balance",
+			filters,
+			"Profit and Loss",
+			[],
+			period_closing_voucher=last_period_closing_voucher[0].name,
+			ignore_is_opening=1,
 		)
-		print("result", result)
+
+		# Execute the branch for GL Entry if period_end_date < filters.from_date - 1
+		if getdate(last_period_closing_voucher[0].period_end_date) < getdate(add_days(filters.from_date, -1)):
+			start_date = add_days(last_period_closing_voucher[0].period_end_date, 1)
+			gle += get_opening_balance(
+				"GL Entry",
+				filters,
+				"Profit and Loss",
+				[],
+				start_date=start_date,
+				ignore_is_opening=1,
+			)
+
+		# Original test call (for standard branch)
+		result = get_opening_balance(
+			doctype="GL Entry",
+			report_type="Profit and Loss",
+			filters=filters,
+			accounting_dimensions=[],
+			ignore_is_opening=1
+		)
+
 		self.assertIsInstance(result, list)
-		
+
+		# Cleanup: cancel the sales invoice
 		if si.docstatus == 1:
 			si.cancel()
-
 
 def create_company(**args):
     args = frappe._dict(args)
@@ -319,6 +417,8 @@ def create_accounting_dimension(**args):
         },
     )
     accounting_dimension.save()
+    
+	
 
 
 def disable_dimension(**args):
